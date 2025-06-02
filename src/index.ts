@@ -6,8 +6,8 @@ import Stripe from "stripe";
 // Define our MCP agent with tools
 export class MyMCP extends McpAgent {
 	server = new McpServer({
-		name: "Authless Calculator",
-		version: "1.0.0",
+		name: "Stripe E-commerce MCP Server",
+		version: "0.0.1",
 	});
 
 	async init() {
