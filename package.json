@@ -14,6 +14,7 @@
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.11.4",
 		"agents": "^0.0.90",
+		"stripe": "^18.1.1",
 		"zod": "^3.25.16"
 	},
 	"devDependencies": {

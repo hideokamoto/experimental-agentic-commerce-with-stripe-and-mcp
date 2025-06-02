@@ -1,6 +1,7 @@
 import { McpAgent } from "agents/mcp";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import Stripe from "stripe";
 
 // Define our MCP agent with tools
 export class MyMCP extends McpAgent {
@@ -10,51 +11,106 @@ export class MyMCP extends McpAgent {
 	});
 
 	async init() {
-		// Simple addition tool
+		const apiKey = process.env.STRIPE_API_KEY
+		const stripe = new Stripe(apiKey as string)
 		this.server.tool(
-			"add",
-			{ a: z.number(), b: z.number() },
-			async ({ a, b }) => ({
-				content: [{ type: "text", text: String(a + b) }],
-			})
-		);
-
-		// Calculator tool with multiple operations
-		this.server.tool(
-			"calculate",
-			{
-				operation: z.enum(["add", "subtract", "multiply", "divide"]),
-				a: z.number(),
-				b: z.number(),
+			"create_checkout_session",
+			{ 
+			  items: z.array(z.object({
+				price_id: z.string(),
+				quantity: z.number().int().positive()
+			  })),
+			  successUrl: z.string().url().default("https://example.com/success"),
+			  cancelUrl: z.string().url().default("https://example.com/cancel")
 			},
-			async ({ operation, a, b }) => {
-				let result: number;
-				switch (operation) {
-					case "add":
-						result = a + b;
-						break;
-					case "subtract":
-						result = a - b;
-						break;
-					case "multiply":
-						result = a * b;
-						break;
-					case "divide":
-						if (b === 0)
-							return {
-								content: [
-									{
-										type: "text",
-										text: "Error: Cannot divide by zero",
-									},
-								],
-							};
-						result = a / b;
-						break;
+			async (params) => {
+				const { items, successUrl, cancelUrl } = params
+				const session = await stripe.checkout.sessions.create({
+					success_url: successUrl,
+					cancel_url: cancelUrl,
+					mode: "payment",
+					line_items: items.map(item => ({
+						price: item.price_id,
+						quantity: item.quantity,
+					}))
+				})
+				return {
+					content: [{
+						type: "text",
+						text: JSON.stringify(session)
+					}]
 				}
-				return { content: [{ type: "text", text: String(result) }] };
 			}
-		);
+		)
+		this.server.tool(
+			"list_products",
+			{
+				/**
+				 * descriptionとmetadata[string]そしてnameを使った検索をサポートする
+				 * ANDとORで組み合わせる
+				*/
+				description: z.string().optional().describe("Product description"),
+				metadata: z.record(z.string()).optional().describe("Product metadata"),
+				name: z.string().optional().describe("Product name"),
+				operator: z.enum(["AND", "OR"]).optional().describe("Operator for AND/OR"),
+				limit: z.number().default(10).describe("Limit the number of products to return"),
+			},
+			async ({limit, ...params}) => {
+				if (Object.keys(params).length === 0) {
+					const products = await stripe.products.list({
+						active: true,
+						expand: ["data.default_price"],
+						limit
+					})
+					return {
+						content: [{
+							type: "text",
+							text: JSON.stringify(products.data)
+						}]
+					}
+				}
+				const { description, metadata, name, operator } = params
+				const query: string[] = [];
+				if (description) query.push(`description:"${description}"`);
+				if (name) query.push(`name:"${name}"`);
+				if (metadata) {
+					for (const [key, value] of Object.entries(metadata)) {
+						query.push(`metadata["${key}"]:"${value}"`);
+					}
+				}
+				const searchQuery = query.join(operator === "OR" ? " OR " : " AND ");
+				const searchedProducts = await stripe.products.search({
+					query: searchQuery,
+					expand: ["data.default_price"],
+					limit
+				});
+				return {
+					content: [{
+						type: "text",
+						text: JSON.stringify(searchedProducts.data)
+					}]
+				}
+			}
+		)
+		this.server.resource(
+			"products",
+			new ResourceTemplate("products://{product_id}", {
+				list: undefined
+			}),
+		async () => {
+			const products = await stripe.products.list({
+				active: true
+			})
+			console.log(products)
+			return {
+				contents: products.data.map(product => {
+					return {
+						uri: `products://${product.id}`,
+						text: JSON.stringify(product)
+					}
+				})
+			}
+		})
 	}
 }
 
